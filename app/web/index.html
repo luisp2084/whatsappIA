@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel del agente</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Acceso -->
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <h1>Panel del agente</h1>
+      <p class="muted">Introduce el token de administrador para ver y atender las conversaciones de WhatsApp.</p>
+      <label>Token de administrador
+        <input id="login-token" type="password" autocomplete="current-password" required>
+      </label>
+      <label>Tu nombre (aparece en el historial)
+        <input id="login-name" type="text" maxlength="60" placeholder="p. ej. Marta">
+      </label>
+      <p id="login-error" class="error" hidden></p>
+      <button class="btn primary" type="submit">Entrar</button>
+    </form>
+  </section>
+
+  <!-- Aplicación -->
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <strong class="brand">Agente WhatsApp</strong>
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-view="inbox" aria-selected="true">Conversaciones</button>
+        <button class="tab" role="tab" data-view="metrics" aria-selected="false">Métricas</button>
+      </nav>
+      <span id="agent-name" class="muted small"></span>
+      <button id="logout" class="btn ghost small">Salir</button>
+    </header>
+
+    <!-- Bandeja -->
+    <main id="view-inbox" class="inbox">
+      <aside class="list-pane">
+        <div class="list-tools">
+          <input id="search" type="search" placeholder="Buscar nombre, número o texto">
+          <div class="chips" role="group" aria-label="Filtro">
+            <button class="chip" data-filter="all" aria-pressed="true">Todas</button>
+            <button class="chip" data-filter="human" aria-pressed="false">Con humano <span id="human-count" class="count"></span></button>
+            <button class="chip" data-filter="bot" aria-pressed="false">Bot</button>
+          </div>
+        </div>
+        <ul id="conv-list" class="conv-list" aria-live="polite"></ul>
+        <p id="list-empty" class="empty" hidden>No hay conversaciones todavía.</p>
+      </aside>
+
+      <section class="chat-pane" id="chat-pane">
+        <div id="chat-empty" class="empty center">Selecciona una conversación.</div>
+        <div id="chat" class="chat" hidden>
+          <header class="chat-head">
+            <button id="back" class="btn ghost small back" aria-label="Volver a la lista">←</button>
+            <div class="who">
+              <strong id="chat-name"></strong>
+              <span id="chat-number" class="muted small"></span>
+            </div>
+            <span id="chat-mode" class="badge"></span>
+            <span id="chat-window" class="small"></span>
+            <div class="actions">
+              <button id="takeover" class="btn small">Tomar control</button>
+              <button id="release" class="btn small">Devolver al bot</button>
+            </div>
+          </header>
+          <ol id="messages" class="messages"></ol>
+          <form id="composer" class="composer">
+            <p id="composer-note" class="note small" hidden></p>
+            <div class="composer-row">
+              <textarea id="composer-text" rows="2" maxlength="4096"
+                placeholder="Escribe como agente humano (Ctrl+Enter para enviar)"></textarea>
+              <button id="send" class="btn primary" type="submit">Enviar</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <!-- Métricas -->
+    <main id="view-metrics" class="metrics" hidden>
+      <div class="metrics-head">
+        <h2>Últimos <span id="m-days-label">14</span> días</h2>
+        <select id="m-days" aria-label="Periodo">
+          <option value="7">7 días</option>
+          <option value="14" selected>14 días</option>
+          <option value="30">30 días</option>
+        </select>
+      </div>
+      <div id="tiles" class="tiles"></div>
+      <section class="card">
+        <h3>Turnos atendidos por la IA, por día</h3>
+        <div id="chart" class="chart"></div>
+        <div id="tooltip" class="tooltip" role="status" hidden></div>
+      </section>
+      <div class="two-col">
+        <section class="card">
+          <h3>Uso de herramientas</h3>
+          <table class="table" id="tools-table"></table>
+        </section>
+        <section class="card">
+          <h3>Detalle diario</h3>
+          <div class="table-wrap"><table class="table" id="days-table"></table></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="alert" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
