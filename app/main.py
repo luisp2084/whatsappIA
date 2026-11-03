@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .admin import build_router
@@ -123,6 +123,10 @@ def create_app(settings: Settings, **overrides: Any) -> FastAPI:
     # --- Panel web ---------------------------------------------------------------
 
     app.include_router(build_router(settings.admin_token))
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> Response:
+        return RedirectResponse("/admin/")
 
     app.mount("/admin", StaticFiles(directory=WEB_DIR, html=True), name="admin")
 

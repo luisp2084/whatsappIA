@@ -18,6 +18,7 @@
       <label>Tu nombre (aparece en el historial)
         <input id="login-name" type="text" maxlength="60" placeholder="p. ej. Marta">
       </label>
+      <p id="login-hint" class="hint" hidden></p>
       <p id="login-error" class="error" hidden></p>
       <button class="btn primary" type="submit">Entrar</button>
     </form>
@@ -34,6 +35,16 @@
       <span id="agent-name" class="muted small"></span>
       <button id="logout" class="btn ghost small">Salir</button>
     </header>
+
+    <div id="demo-bar" class="demo-bar" hidden>
+      <p class="demo-label"><strong>Modo demo</strong> · IA: <span id="demo-ai"></span></p>
+      <form id="demo-form" class="demo-form">
+        <label class="sr-only" for="demo-text">Mensaje de cliente</label>
+        <input id="demo-text" type="text" maxlength="2000" autocomplete="off"
+          placeholder="Escribe como si fueras un cliente, p. ej. ¿dónde está mi pedido TX-123456?">
+        <button class="btn primary small" type="submit">Enviar como cliente</button>
+      </form>
+    </div>
 
     <!-- Bandeja -->
     <main id="view-inbox" class="inbox">

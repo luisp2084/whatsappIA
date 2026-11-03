@@ -72,6 +72,7 @@
     $("login").hidden = true; $("app").hidden = false;
     $("agent-name").textContent = state.name ? `Agente: ${state.name}` : "";
     refresh();
+    checkDemo();
     clearInterval(state.timer);
     state.timer = setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
   }
@@ -401,6 +402,39 @@
     });
     $("chart").replaceChildren(svg);
   }
+
+  // --- Modo demo (solo existe si el servidor arrancó con `python -m app.demo`) -------------
+
+  async function checkDemo() {
+    try {
+      const info = await api("/demo");
+      $("demo-ai").textContent = info.ai;
+      state.demoCustomer = info.customer.wa_id;
+      $("demo-bar").hidden = false;
+    } catch { $("demo-bar").hidden = true; }
+  }
+
+  $("demo-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const box = $("demo-text"), text = box.value.trim();
+    if (!text) return;
+    try {
+      const { wa_id } = await api("/demo/incoming", { method: "POST", body: JSON.stringify({ text }) });
+      box.value = "";
+      if (state.view !== "inbox") document.querySelector('[data-view="inbox"]').click();
+      if (state.current !== wa_id) await openConversation(wa_id);
+      // La respuesta llega tras el debounce: refresco unas veces seguidas.
+      for (const ms of [800, 1800, 3000, 5000]) setTimeout(refresh, ms);
+      box.focus();
+    } catch (err) { if (err.message !== "401") toast(err.message); }
+  });
+
+  fetch("/demo-info").then((r) => (r.ok ? r.json() : null)).then((info) => {
+    if (!info?.token_hint) return;
+    $("login-hint").hidden = false;
+    $("login-hint").textContent = `Modo demo: el token es "${info.token_hint}".`;
+    $("login-token").value = info.token_hint;
+  }).catch(() => {});
 
   // --- Inicio ----------------------------------------------------------------------
 

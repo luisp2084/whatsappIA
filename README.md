@@ -6,6 +6,7 @@ Python 3.12+, FastAPI, Redis y `google-genai`. El panel es HTML/CSS/JS sin build
 
 ```
 app/
+  demo.py        Modo demo: todo el sistema sin WhatsApp ni Redis (`python -m app.demo`)
   main.py        Endpoints: GET/POST /webhook, POST /tasks/pubsub, GET /healthz; monta el panel en /admin
   admin.py       API del panel (/api/admin/*): conversaciones, responder, tomar/devolver control, métricas
   web/           Panel web (index.html, styles.css, app.js)
@@ -19,7 +20,7 @@ app/
   security.py    Firma HMAC del webhook, seudonimización, redacción de PII
   parsing.py     Payload del webhook → IncomingMessage / StatusEvent
   formatting.py  Markdown → formato WhatsApp, troceo a 4096 caracteres
-tests/           26 tests (fakes de Gemini, WhatsApp y Redis; no hace falta red)
+tests/           27 tests (fakes de Gemini, WhatsApp y Redis; no hace falta red)
 ```
 
 ## Qué hace un turno
@@ -42,6 +43,31 @@ tests/           26 tests (fakes de Gemini, WhatsApp y Redis; no hace falta red)
 
 Si Gemini falla se reintenta con `GEMINI_FALLBACK_MODEL`; si también falla, el usuario recibe un mensaje
 de disculpa con la opción de hablar con un agente.
+
+## Probarlo en la nube con GitHub Codespaces (sin instalar nada)
+
+1. En la página del repositorio pulsa **Code → Codespaces → Create codespace on main**.
+2. Espera 2–3 minutos: se instalan las dependencias y arranca el sistema en **modo demo** (`python -m app.demo`).
+3. Se abre una pestaña con el panel. Si no aparece, ve a la pestaña **Ports** de abajo y abre el puerto **8080**.
+4. Entra con el token **`demo`** (ya viene escrito).
+5. En la barra **Modo demo**, escribe como si fueras un cliente. Por ejemplo:
+   - `hola`
+   - `¿dónde está mi pedido TX-123456?`
+   - `quiero hablar con una persona`
+   Verás la respuesta del bot y el paso a humano en tiempo real.
+
+En el modo demo, WhatsApp y Redis se simulan en memoria: no se envía nada a nadie y los datos se pierden al
+parar. La IA usa reglas simples. **Para probar Gemini de verdad**, crea una clave en
+[Google AI Studio](https://aistudio.google.com/apikey) y guárdala en GitHub → Settings → Codespaces →
+Secrets como `GEMINI_API_KEY` (con acceso a este repositorio). Después reinicia el codespace.
+
+Si cierras la terminal, vuelve a arrancarlo con:
+
+```bash
+python -m app.demo
+```
+
+Codespaces es gratuito hasta un límite de horas al mes. Detén el codespace cuando no lo uses.
 
 ## Panel web (`/admin`)
 
