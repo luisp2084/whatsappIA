@@ -64,3 +64,11 @@ def test_trim_starts_on_real_user_turn():
     m = types.Content(role="model", parts=[types.Part.from_text(text="hey")])
     out = trim_history([u, m, fr, m, u, m], 4)
     assert out[0] is u and len(out) == 2
+
+
+def test_thinking_budget_only_applies_to_25_models():
+    from app.agent import Agent
+
+    agent = Agent(object(), "gemini-3.5-flash", thinking_budget=0)  # type: ignore[arg-type]
+    assert agent.config_for("gemini-3.5-flash").thinking_config is None
+    assert agent.config_for("gemini-2.5-flash").thinking_config.thinking_budget == 0

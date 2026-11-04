@@ -13,6 +13,12 @@ def _env(name: str, default: str | None = None, required: bool = False) -> str:
     return value or ""
 
 
+# Modelos por defecto. Google retira modelos con frecuencia: revisa
+# https://ai.google.dev/gemini-api/docs/deprecations y cámbialos con GEMINI_MODEL / GEMINI_FALLBACK_MODEL.
+DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_FALLBACK_MODEL = "gemini-flash-latest"  # alias de Google: siempre el Flash más reciente
+
+
 @dataclass(frozen=True)
 class Settings:
     # WhatsApp Cloud API
@@ -24,9 +30,9 @@ class Settings:
 
     # Gemini
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
-    gemini_fallback_model: str = "gemini-2.5-flash-lite"
-    thinking_budget: int | None = 0  # 0 = sin "thinking" (menor latencia); None = valor por defecto del modelo
+    gemini_model: str = DEFAULT_MODEL
+    gemini_fallback_model: str = DEFAULT_FALLBACK_MODEL
+    thinking_budget: int | None = None  # solo modelos 2.5: 0 = sin "thinking"; None = valor por defecto
 
     # Estado y colas
     redis_url: str = "redis://localhost:6379/0"
@@ -47,7 +53,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        tb = _env("THINKING_BUDGET", "0")
+        tb = _env("THINKING_BUDGET", "")
         return cls(
             wa_token=_env("WA_TOKEN", required=True),
             wa_phone_number_id=_env("WA_PHONE_NUMBER_ID", required=True),
@@ -55,8 +61,8 @@ class Settings:
             wa_verify_token=_env("WA_VERIFY_TOKEN", required=True),
             graph_version=_env("GRAPH_VERSION", "v23.0"),
             gemini_api_key=_env("GEMINI_API_KEY"),
-            gemini_model=_env("GEMINI_MODEL", "gemini-2.5-flash"),
-            gemini_fallback_model=_env("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite"),
+            gemini_model=_env("GEMINI_MODEL", DEFAULT_MODEL),
+            gemini_fallback_model=_env("GEMINI_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
             thinking_budget=None if tb == "" else int(tb),
             redis_url=_env("REDIS_URL", "redis://localhost:6379/0"),
             queue_mode=_env("QUEUE_MODE", "local"),

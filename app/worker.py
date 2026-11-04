@@ -13,7 +13,7 @@ import httpx
 from google.genai import types
 
 from . import prompts
-from .agent import Agent, dump_history, load_history
+from .agent import Agent, describe_error, dump_history, load_history
 from .parsing import IncomingMessage
 from .security import pseudonymize, redact_pii
 from .session import Session, SessionStore
@@ -140,8 +140,10 @@ class Worker:
 
         try:
             result = await self.agent.run(load_history(session.history), parts, ToolContext(wa_id=wa_id))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             log.exception("El agente falló (usuario %s)", pseudonymize(wa_id, self.pepper))
+            # Visible solo en el panel (el cliente recibe el mensaje genérico): ayuda a diagnosticar.
+            await self.store.record(wa_id, "system", f"La IA no pudo responder: {describe_error(exc)}")
             await self._say(wa_id, prompts.FALLBACK_ERROR)
             self._track("agent_error", wa_id, started)
             await self.store.incr_metrics({"errors": 1})

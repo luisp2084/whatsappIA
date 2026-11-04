@@ -109,3 +109,15 @@ async def test_image_is_sent_to_model(store, wa, handoff):
     assert parts[0].text == "llegó así" and parts[1].inline_data.mime_type == "image/jpeg"
     session = await store.load(WA)
     assert "inline_data" not in str(session.history)
+
+
+async def test_ai_error_is_visible_in_panel_but_not_to_customer(store, wa, handoff):
+    from google.genai import errors
+
+    not_found = errors.ClientError(404, {"error": {"code": 404, "status": "NOT_FOUND",
+                                                   "message": "models/gemini-x is not found"}})
+    worker, _ = make_worker(store, wa, handoff, [not_found, RuntimeError("quota")], fallback="backup")
+    await worker.handle_incoming(msg("m1", "hola"))
+    assert wa.sent[-1]["text"] == prompts.FALLBACK_ERROR
+    system = [m["text"] for m in await store.transcript(WA) if m["role"] == "system"]
+    assert "404" in system[0] and "NOT_FOUND" in system[0] and "quota" in system[0]

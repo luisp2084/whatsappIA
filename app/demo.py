@@ -26,8 +26,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from .agent import Agent
-from .config import Settings
+from .agent import Agent, describe_error
+from .config import DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, Settings
 from .main import create_app
 from .parsing import IncomingMessage
 from .session import SessionStore
@@ -136,7 +136,7 @@ class CustomerMessage(BaseModel):
     name: str = Field(default=DEMO_CUSTOMER[1], max_length=60)
 
 
-def demo_router(admin_token: str, ai_label: str) -> APIRouter:
+def demo_router(admin_token: str, ai: dict[str, str]) -> APIRouter:
     def require_admin(authorization: str = Header(default="")) -> None:
         if not hmac.compare_digest(authorization, f"Bearer {admin_token}"):
             raise HTTPException(status_code=401)
@@ -149,7 +149,7 @@ def demo_router(admin_token: str, ai_label: str) -> APIRouter:
 
     @router.get("/api/admin/demo", dependencies=[Depends(require_admin)])
     async def info() -> dict[str, Any]:
-        return {"demo": True, "ai": ai_label, "customer": {"wa_id": DEMO_CUSTOMER[0], "name": DEMO_CUSTOMER[1]}}
+        return {"demo": True, "ai": ai["label"], "customer": {"wa_id": DEMO_CUSTOMER[0], "name": DEMO_CUSTOMER[1]}}
 
     @router.post("/api/admin/demo/incoming", dependencies=[Depends(require_admin)])
     async def incoming(request: Request, body: CustomerMessage) -> dict[str, str]:
@@ -208,22 +208,45 @@ def build_demo() -> tuple[Any, SessionStore]:
     if os.environ.get("GEMINI_API_KEY"):
         from google import genai
 
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        agent = Agent(genai.Client(), model, os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite"))
+        model = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
+        agent = Agent(genai.Client(), model, os.environ.get("GEMINI_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL))
         ai_label = f"Gemini real ({model})"
     else:
         agent = Agent(RuleBasedClient(), "reglas")  # type: ignore[arg-type]
         ai_label = "reglas simples (añade GEMINI_API_KEY para usar Gemini)"
 
     app = create_app(settings, store=store, wa=DemoWhatsApp(), agent=agent, handoff=LogHandoff())
-    app.include_router(demo_router(admin_token, ai_label))
-    return app, store
+    app.state.ai = {"label": ai_label}
+    app.include_router(demo_router(admin_token, app.state.ai))
+    return app, store, agent
+
+
+async def check_gemini(agent: Agent) -> str | None:
+    """Comprueba la clave y los modelos antes de abrir el panel. Devuelve un aviso o None."""
+    if isinstance(agent.client, RuleBasedClient):
+        return None
+    problems = []
+    models = list(dict.fromkeys(m for m in (agent.model, agent.fallback_model) if m))
+    for model in models:
+        try:
+            await agent.client.aio.models.get(model=model)
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{model}: {describe_error(exc)}")
+    if len(problems) == len(models):
+        return "ningún modelo responde. " + " | ".join(problems)
+    return ("modelo de respaldo usado: " + " | ".join(problems)) if problems else None
 
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    app, store = build_demo()
+    app, store, agent = build_demo()
     await seed(store)
+    warning = await check_gemini(agent)
+    if warning:
+        app.state.ai["label"] += f" · ERROR: {warning}"
+        print(f"\n  ATENCIÓN Gemini: {warning}\n"
+              "  Revisa GEMINI_API_KEY o elige otro modelo con GEMINI_MODEL "
+              "(lista: https://ai.google.dev/gemini-api/docs/models).\n", flush=True)
     port = int(os.environ.get("PORT", "8080"))
     print(f"\n  Panel listo: http://localhost:{port}/admin/  (token: {os.environ.get('ADMIN_TOKEN') or 'demo'})\n",
           flush=True)

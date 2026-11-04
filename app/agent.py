@@ -32,18 +32,26 @@ class AgentResult:
 
 class Agent:
     def __init__(self, client: genai.Client, model: str, fallback_model: str | None = None,
-                 thinking_budget: int | None = 0, registry: dict[str, ToolFn] | None = None,
+                 thinking_budget: int | None = None, registry: dict[str, ToolFn] | None = None,
                  temperature: float = 0.3):
         self.client = client
         self.model = model
         self.fallback_model = fallback_model
         self.registry = registry
-        thinking = types.ThinkingConfig(thinking_budget=thinking_budget) if thinking_budget is not None else None
-        self.config = types.GenerateContentConfig(
+        self.thinking_budget = thinking_budget
+        self.temperature = temperature
+
+    def config_for(self, model: str) -> types.GenerateContentConfig:
+        # thinking_budget solo existe en la familia 2.5; los modelos 3.x lo gestionan con thinking_level
+        # y algunos rechazan el presupuesto 0. Fuera de 2.5 se deja el valor por defecto del modelo.
+        thinking = None
+        if self.thinking_budget is not None and model.startswith("gemini-2.5"):
+            thinking = types.ThinkingConfig(thinking_budget=self.thinking_budget)
+        return types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             tools=TOOLS,
-            temperature=temperature,
-            max_output_tokens=1024,
+            temperature=self.temperature,
+            max_output_tokens=2048,
             thinking_config=thinking,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
@@ -96,13 +104,33 @@ class Agent:
     async def _generate(self, contents: list[types.Content]) -> tuple[types.GenerateContentResponse, str]:
         try:
             return await self.client.aio.models.generate_content(
-                model=self.model, contents=contents, config=self.config), self.model
-        except Exception:
-            if not self.fallback_model:
+                model=self.model, contents=contents, config=self.config_for(self.model)), self.model
+        except Exception as primary_error:
+            if not self.fallback_model or self.fallback_model == self.model:
                 raise
-            log.warning("Fallo en %s; usando %s", self.model, self.fallback_model, exc_info=True)
-            return await self.client.aio.models.generate_content(
-                model=self.fallback_model, contents=contents, config=self.config), self.fallback_model
+            log.warning("Fallo en %s (%s); usando %s", self.model, describe_error(primary_error),
+                        self.fallback_model)
+            try:
+                return await self.client.aio.models.generate_content(
+                    model=self.fallback_model, contents=contents,
+                    config=self.config_for(self.fallback_model)), self.fallback_model
+            except Exception as fallback_error:
+                raise AgentError(f"{self.model}: {describe_error(primary_error)} | "
+                                 f"{self.fallback_model}: {describe_error(fallback_error)}") from fallback_error
+
+
+class AgentError(Exception):
+    """Fallaron el modelo principal y el de respaldo; el mensaje resume ambos errores."""
+
+
+def describe_error(exc: BaseException) -> str:
+    """Resumen corto y sin datos sensibles de un error de la API (código, estado y mensaje)."""
+    code = getattr(exc, "code", None)
+    status = getattr(exc, "status", None)
+    message = getattr(exc, "message", None) or str(exc)
+    head = " ".join(str(x) for x in (code, status) if x)
+    text = f"{head} {message}".strip() if head else f"{type(exc).__name__}: {message}"
+    return " ".join(text.split())[:300]
 
 
 # ---------------------------------------------------------------------------

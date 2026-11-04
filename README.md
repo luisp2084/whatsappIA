@@ -61,6 +61,17 @@ parar. La IA usa reglas simples. **Para probar Gemini de verdad**, crea una clav
 [Google AI Studio](https://aistudio.google.com/apikey) y guárdala en GitHub → Settings → Codespaces →
 Secrets como `GEMINI_API_KEY` (con acceso a este repositorio). Después reinicia el codespace.
 
+Si el bot contesta *"Ahora mismo tengo problemas para responder…"*, la llamada a Gemini está fallando.
+El motivo exacto aparece en el panel, dentro de la conversación, como un aviso gris *"La IA no pudo responder: …"*.
+Al arrancar, la demo también comprueba la clave y el modelo, y avisa en la barra "Modo demo" y en la terminal. Causas habituales:
+
+| Lo que verás | Causa | Solución |
+| --- | --- | --- |
+| `400 INVALID_ARGUMENT API key not valid` | Clave mal copiada o borrada | Crea otra en AI Studio y actualiza el secreto |
+| `404 NOT_FOUND … models/… is not found` | Modelo retirado o no disponible para tu cuenta | Define el secreto `GEMINI_MODEL` con un modelo vigente ([lista](https://ai.google.dev/gemini-api/docs/models)) |
+| `429 RESOURCE_EXHAUSTED` | Límite del plan gratuito alcanzado | Espera unos minutos o activa la facturación en AI Studio |
+| `403 PERMISSION_DENIED` | La API no está habilitada para el proyecto de la clave | Crea la clave desde AI Studio, que la habilita sola |
+
 Si cierras la terminal, vuelve a arrancarlo con:
 
 ```bash
