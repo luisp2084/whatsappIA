@@ -7,119 +7,116 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Acceso -->
   <section id="login" class="login" hidden>
     <form id="login-form" class="login-card">
       <h1>Panel del agente</h1>
-      <p class="muted">Introduce el token de administrador para ver y atender las conversaciones de WhatsApp.</p>
-      <label>Token de administrador
-        <input id="login-token" type="password" autocomplete="current-password" required>
+      <p class="muted">Entra con tu correo y contraseña para atender las conversaciones de WhatsApp.</p>
+      <label>Correo
+        <input id="login-email" type="email" autocomplete="username" required>
       </label>
-      <label>Tu nombre (aparece en el historial)
-        <input id="login-name" type="text" maxlength="60" placeholder="p. ej. Marta">
+      <label>Contraseña
+        <input id="login-password" type="password" autocomplete="current-password" required>
       </label>
-      <p id="login-hint" class="hint" hidden></p>
+      <div id="login-hint" class="hint" hidden></div>
       <p id="login-error" class="error" hidden></p>
       <button class="btn primary" type="submit">Entrar</button>
     </form>
   </section>
 
-  <!-- Aplicación -->
   <div id="app" class="app" hidden>
     <header class="topbar">
       <strong class="brand">Agente WhatsApp</strong>
-      <nav class="tabs" role="tablist">
-        <button class="tab" role="tab" data-view="inbox" aria-selected="true">Conversaciones</button>
-        <button class="tab" role="tab" data-view="metrics" aria-selected="false">Métricas</button>
-      </nav>
-      <span id="agent-name" class="muted small"></span>
-      <button id="logout" class="btn ghost small">Salir</button>
+      <nav id="nav" class="tabs" aria-label="Secciones"></nav>
+      <button id="bot-switch" class="switch" type="button" title="Interruptor de emergencia del bot"></button>
+      <details class="usermenu">
+        <summary id="user-label" class="small"></summary>
+        <div class="menu">
+          <form id="password-form" class="stack">
+            <strong class="small">Cambiar contraseña</strong>
+            <input id="pw-current" type="password" placeholder="Contraseña actual" autocomplete="current-password" required>
+            <input id="pw-new" type="password" placeholder="Nueva (mín. 10 caracteres)" autocomplete="new-password" required>
+            <button class="btn small" type="submit">Guardar contraseña</button>
+          </form>
+          <button id="logout" class="btn small ghost" type="button">Salir</button>
+        </div>
+      </details>
     </header>
 
     <div id="demo-bar" class="demo-bar" hidden>
       <p class="demo-label"><strong>Modo demo</strong> · IA: <span id="demo-ai"></span></p>
       <form id="demo-form" class="demo-form">
-        <label class="sr-only" for="demo-text">Mensaje de cliente</label>
+        <label class="sr-only" for="demo-customer">Cliente simulado</label>
+        <select id="demo-customer"></select>
+        <label class="sr-only" for="demo-text">Mensaje del cliente</label>
         <input id="demo-text" type="text" maxlength="2000" autocomplete="off"
-          placeholder="Escribe como si fueras un cliente, p. ej. ¿dónde está mi pedido TX-123456?">
-        <button class="btn primary small" type="submit">Enviar como cliente</button>
+          placeholder="Escribe como el cliente: «cuánto debo», «no tengo internet», «qué planes tienen»">
+        <button class="btn primary small" type="submit">Enviar</button>
+        <label class="btn small" for="demo-file">Adjuntar comprobante</label>
+        <input id="demo-file" type="file" accept="image/*,application/pdf" hidden>
+        <button id="demo-receipt" class="btn small" type="button" hidden>Simular comprobante</button>
       </form>
     </div>
 
-    <!-- Bandeja -->
-    <main id="view-inbox" class="inbox">
+    <main id="view-inbox" class="inbox view">
       <aside class="list-pane">
         <div class="list-tools">
-          <input id="search" type="search" placeholder="Buscar nombre, número o texto">
-          <div class="chips" role="group" aria-label="Filtro">
-            <button class="chip" data-filter="all" aria-pressed="true">Todas</button>
-            <button class="chip" data-filter="human" aria-pressed="false">Con humano <span id="human-count" class="count"></span></button>
-            <button class="chip" data-filter="bot" aria-pressed="false">Bot</button>
+          <div class="chips" role="tablist" aria-label="Estado">
+            <button class="chip" data-tab="pendientes">Pendientes <span class="count" data-count="pendientes"></span></button>
+            <button class="chip" data-tab="mias">Mías <span class="count" data-count="mias"></span></button>
+            <button class="chip" data-tab="todas">Todas <span class="count" data-count="todas"></span></button>
+            <button class="chip" data-tab="cerradas">Cerradas</button>
           </div>
+          <input id="search" type="search" placeholder="Buscar nombre, número o texto">
         </div>
-        <ul id="conv-list" class="conv-list" aria-live="polite"></ul>
-        <p id="list-empty" class="empty" hidden>No hay conversaciones todavía.</p>
+        <ul id="conv-list" class="conv-list"></ul>
+        <p id="list-empty" class="empty" hidden>No hay conversaciones en esta pestaña.</p>
       </aside>
-
-      <section class="chat-pane" id="chat-pane">
+      <section class="chat-pane">
         <div id="chat-empty" class="empty center">Selecciona una conversación.</div>
         <div id="chat" class="chat" hidden>
           <header class="chat-head">
-            <button id="back" class="btn ghost small back" aria-label="Volver a la lista">←</button>
+            <button id="back" class="btn ghost small back" type="button" aria-label="Volver a la lista">←</button>
             <div class="who">
               <strong id="chat-name"></strong>
-              <span id="chat-number" class="muted small"></span>
+              <span id="chat-sub" class="muted small"></span>
             </div>
-            <span id="chat-mode" class="badge"></span>
+            <span id="chat-state" class="badge"></span>
             <span id="chat-window" class="small"></span>
             <div class="actions">
-              <button id="takeover" class="btn small">Tomar control</button>
-              <button id="release" class="btn small">Devolver al bot</button>
+              <button id="act-take" class="btn small" type="button">Tomar</button>
+              <button id="act-release" class="btn small" type="button">Devolver al bot</button>
+              <button id="act-close" class="btn small" type="button">Cerrar</button>
             </div>
           </header>
+          <div id="chat-summary" class="summary small" hidden></div>
           <ol id="messages" class="messages"></ol>
           <form id="composer" class="composer">
             <p id="composer-note" class="note small" hidden></p>
-            <div class="composer-row">
-              <textarea id="composer-text" rows="2" maxlength="4096"
-                placeholder="Escribe como agente humano (Ctrl+Enter para enviar)"></textarea>
+            <div id="free-text" class="composer-row">
+              <textarea id="composer-text" rows="2" maxlength="4096" placeholder="Escribe como asesor (Ctrl+Enter para enviar)"></textarea>
               <button id="send" class="btn primary" type="submit">Enviar</button>
+            </div>
+            <div id="template-box" class="template-box" hidden>
+              <div class="composer-row">
+                <select id="template-name" aria-label="Plantilla"></select>
+                <button id="template-send" class="btn primary" type="button">Enviar plantilla</button>
+              </div>
+              <div id="template-params" class="params"></div>
+              <p id="template-preview" class="preview small"></p>
             </div>
           </form>
         </div>
       </section>
     </main>
 
-    <!-- Métricas -->
-    <main id="view-metrics" class="metrics" hidden>
-      <div class="metrics-head">
-        <h2>Últimos <span id="m-days-label">14</span> días</h2>
-        <select id="m-days" aria-label="Periodo">
-          <option value="7">7 días</option>
-          <option value="14" selected>14 días</option>
-          <option value="30">30 días</option>
-        </select>
-      </div>
-      <div id="tiles" class="tiles"></div>
-      <section class="card">
-        <h3>Turnos atendidos por la IA, por día</h3>
-        <div id="chart" class="chart"></div>
-        <div id="tooltip" class="tooltip" role="status" hidden></div>
-      </section>
-      <div class="two-col">
-        <section class="card">
-          <h3>Uso de herramientas</h3>
-          <table class="table" id="tools-table"></table>
-        </section>
-        <section class="card">
-          <h3>Detalle diario</h3>
-          <div class="table-wrap"><table class="table" id="days-table"></table></div>
-        </section>
-      </div>
-    </main>
+    <main id="view-review" class="page view" hidden></main>
+    <main id="view-control" class="page view" hidden></main>
+    <main id="view-metrics" class="page view" hidden></main>
+    <main id="view-users" class="page view" hidden></main>
+    <main id="view-audit" class="page view" hidden></main>
   </div>
 
-  <div id="toast" class="toast" role="alert" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>

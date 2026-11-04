@@ -1,0 +1,61 @@
+name: Evaluaciones con Gemini
+
+# Corre el conjunto dorado con Gemini real cuando cambia lo que decide cómo responde el agente.
+# Requiere el secreto GEMINI_API_KEY (Settings → Secrets and variables → Actions).
+on:
+  pull_request:
+    paths:
+      - "app/prompts.py"
+      - "app/tools.py"
+      - "app/areas.py"
+      - "app/agent.py"
+      - "app/control.py"
+      - "app/config.py"
+      - "evals/**"
+  workflow_dispatch:
+    inputs:
+      filtro:
+        description: "Solo los casos cuyo id contenga este texto (vacío = todos)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Comprobar que hay clave de Gemini
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::Falta el secreto GEMINI_API_KEY: sin él las evaluaciones no prueban el modelo real."
+            exit 1
+          fi
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+      - name: Ejecutar evaluaciones
+        run: python -m evals.run --filtro "${{ github.event.inputs.filtro }}" --informe evals/report.md
+      - name: Publicar el informe en el resumen
+        if: always()
+        run: test -f evals/report.md && cat evals/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Guardar el informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe-evaluaciones
+          path: evals/report.md
+          if-no-files-found: ignore

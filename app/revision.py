@@ -40,5 +40,6 @@ class RuleSuggester:
             except Exception:  # noqa: BLE001
                 log.warning("No se pudo proponer la regla con IA", exc_info=True)
         if note:
-            return f"Cuando el cliente escriba algo como «{customer[:80]}», {note.rstrip('.')}."
+            note = note.strip().rstrip(".")
+            return f"Cuando el cliente escriba algo como «{customer[:80]}», {note[:1].lower() + note[1:]}."
         return f"No vuelvas a responder «{bot[:80]}» en esta situación; deriva a un asesor si no tienes el dato."

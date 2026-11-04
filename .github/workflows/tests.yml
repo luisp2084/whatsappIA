@@ -15,22 +15,39 @@ concurrency:
 
 jobs:
   pytest:
+    name: Unitarias e integración
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
-
       - name: Instalar dependencias
         run: pip install -r requirements-dev.txt
-
       - name: Comprobar errores de sintaxis
-        run: python -m compileall -q app tests
-
+        run: python -m compileall -q app tests evals e2e
       - name: Ejecutar tests
         run: python -m pytest -q
+      - name: Evaluaciones con el modelo de reglas (comprueba el arnés y los flujos)
+        run: python -m evals.run --informe evals-reglas.md
+
+  e2e:
+    name: Panel extremo a extremo (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Instalar dependencias y Chromium
+        run: |
+          pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: Ejecutar pruebas del panel
+        run: python -m pytest e2e -q

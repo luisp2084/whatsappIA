@@ -110,7 +110,7 @@ def _call(name: str, **args: Any) -> types.GenerateContentResponse:
 
 
 def _usd(v: float) -> str:
-    return f"${v:,.2f}"
+    return "$" + f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
 class RuleBasedModels:
@@ -130,6 +130,18 @@ class RuleBasedModels:
                     results[p.function_response.name] = dict(p.function_response.response or {})
         previous = " ".join(p.text or "" for c in contents[:turn_start] if c.role == "user"
                             for p in c.parts or [] if p.text and not p.function_response)
+        # Comprobante validado en un turno anterior y aún sin registrar (el cliente eligió el contrato después).
+        pending_receipt = None
+        for c in contents[:turn_start]:
+            for p in c.parts or []:
+                fr = p.function_response
+                if fr and fr.name == "validar_comprobante":
+                    pending_receipt = dict(fr.response or {})
+                elif fr and fr.name == "registrar_pago":
+                    pending_receipt = None
+        if pending_receipt and pending_receipt.get("valido") and "validar_comprobante" not in results:
+            results["validar_comprobante"] = pending_receipt
+            has_media = True
         allowed = {d.name for t in (config.tools or []) for d in (t.function_declarations or [])}
         return self._decide(text, previous, has_media, results, allowed)
 
@@ -362,7 +374,8 @@ async def seed(repo: Repo, store: SessionStore) -> None:
         for i, (role, text) in enumerate(msgs):
             await repo.record(wa_id, role, text, name=name, area=area if role == "bot" else "",
                               prompt_version=f"{area}@v1+v1" if role == "bot" else "", ts=t0 + i * 45)
-        await repo.update_conversation(wa_id, state=state, area=area, disclosed=True,
+        summary = next((t.split(": ", 1)[-1] for r, t in msgs if r == "system" and t.startswith("Derivado")), "")
+        await repo.update_conversation(wa_id, state=state, area=area, disclosed=True, handoff_summary=summary,
                                        state_since=t0 + len(msgs) * 45, priority="alta" if state != "bot" else "")
 
     rng = random.Random(7)

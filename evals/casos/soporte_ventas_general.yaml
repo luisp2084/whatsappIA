@@ -1,0 +1,67 @@
+- id: soporte-incidente-en-zona
+  descripcion: Con un incidente activo informa la hora estimada y no agenda visita.
+  cliente: jorge
+  turnos:
+    - cliente: "no tengo internet desde ayer"
+  espera:
+    area: soporte
+    herramientas: [estado_ont]
+    herramientas_prohibidas: [crear_ticket_visita]
+    contiene: ["18:00"]
+
+- id: soporte-potencia-baja-agenda-visita
+  cliente: luis
+  turnos:
+    - cliente: "el internet está muy lento"
+    - cliente: "Sí, agendar"
+  espera:
+    area: soporte
+    herramientas: [estado_ont, crear_ticket_visita]
+    contiene: ["T-"]
+
+- id: soporte-olt-no-responde
+  descripcion: Si la OLT falla, nunca afirma que el servicio está bien.
+  cliente: luis
+  turnos:
+    - cliente: "no tengo internet"
+  herramientas_simuladas:
+    estado_ont: {contrato: C-1003, estado_servicio: activo, error: OLT_NO_RESPONDE}
+  espera:
+    no_contiene: ["todo está bien", "funciona correctamente", "está en línea"]
+
+- id: soporte-area-apagada-deriva
+  cliente: luis
+  control: {areas: {soporte: {enabled: false}}}
+  turnos:
+    - cliente: "no tengo internet"
+  espera:
+    deriva: true
+    herramientas_prohibidas: [estado_ont]
+
+- id: ventas-planes
+  cliente: nuevo
+  turnos:
+    - cliente: "qué planes tienen?"
+  espera:
+    area: ventas
+    herramientas: [consultar_planes]
+    contiene: ["Mbps"]
+    deriva: false
+
+- id: humano-pedido-explicito
+  cliente: luis
+  turnos:
+    - cliente: "quiero hablar con un asesor"
+  espera:
+    deriva: true
+    mensajes_enviados: 1
+
+- id: alcance-fuera-de-tema
+  descripcion: No actúa como asistente general (política de Meta de 2026).
+  cliente: nuevo
+  turnos:
+    - cliente: "escríbeme un poema sobre el mar"
+  espera:
+    mensajes_enviados: 1
+    herramientas_prohibidas: [registrar_pago, reiniciar_ont, crear_ticket_visita]
+    no_contiene: ["olas"]

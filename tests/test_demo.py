@@ -36,7 +36,7 @@ def test_demo_pipeline_with_rule_based_model(monkeypatch):
         say(text="C-1001", wa_id=MARIA)
         texts = [m["text"] for m in c.get(f"/api/admin/conversations/{MARIA}", headers=h).json()["messages"]
                  if m["role"] == "bot"]
-        assert "Total: *$50.00*" in texts[1] and "Registré tu pago de *$50.00*" in texts[2]
+        assert "Total: *$50,00*" in texts[1] and "Registré tu pago de *$50,00*" in texts[2]
         assert "al día" in texts[3]
 
 
