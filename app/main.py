@@ -133,6 +133,15 @@ def create_app(settings: Settings, **overrides: Any) -> FastAPI:
 
     app = FastAPI(title="Agente WhatsApp", lifespan=lifespan)
 
+    @app.middleware("http")
+    async def no_stale_panel(request: Request, call_next):
+        # El panel cambia con cada versión: que el navegador revalide siempre en lugar de mezclar
+        # un app.js viejo con un index.html nuevo (pantalla en blanco).
+        response = await call_next(request)
+        if request.url.path.startswith("/admin"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "role": role}

@@ -735,5 +735,6 @@
 
   // --- inicio ----------------------------------------------------------------------------------
 
+  document.getElementById("boot").hidden = true;
   if (state.token) start(); else logout();
 })();

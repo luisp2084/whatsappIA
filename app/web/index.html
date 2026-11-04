@@ -4,9 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Panel del agente</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
+  <div id="boot" class="boot" role="status">
+    <p>Cargando el panel…</p>
+    <p id="boot-error" class="error" hidden></p>
+  </div>
+  <script>
+    // Si el panel no arranca, mostrarlo en vez de dejar la pantalla vacía.
+    window.addEventListener("error", (e) => {
+      const box = document.getElementById("boot"), msg = document.getElementById("boot-error");
+      if (!box) return;
+      box.hidden = false;
+      msg.hidden = false;
+      msg.textContent = "El panel no pudo arrancar: " + (e.message || "error desconocido") +
+        ". Recarga la página con Ctrl+Shift+R (Cmd+Shift+R en Mac). Si sigue igual, copia este mensaje.";
+    });
+  </script>
   <section id="login" class="login" hidden>
     <form id="login-form" class="login-card">
       <h1>Panel del agente</h1>
@@ -117,6 +132,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
