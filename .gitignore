@@ -2,3 +2,7 @@
 __pycache__/
 .env
 .pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+evals/report.md

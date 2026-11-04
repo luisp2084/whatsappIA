@@ -10,12 +10,21 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from .prompts import SYSTEM_PROMPT
-from .tools import ESCALATE, OFFER_OPTIONS, TOOLS, ToolContext, ToolFn, call_tool
+from .tools import ESCALATE, OFFER_OPTIONS, ToolContext, ToolFn, call_tool
 
 log = logging.getLogger(__name__)
 
-MAX_STEPS = 5  # llamadas al modelo por turno (evita bucles de herramientas)
+MAX_STEPS = 5  # llamadas al modelo por turno; al agotarse se deriva a un asesor
+
+
+@dataclass
+class TurnSpec:
+    """Lo que cambia por área: prompt, herramientas y temperatura."""
+
+    system_prompt: str
+    declarations: list[types.FunctionDeclaration]
+    allowed: set[str]
+    temperature: float = 0.3
 
 
 @dataclass
@@ -28,44 +37,48 @@ class AgentResult:
     tools_used: list[str] = field(default_factory=list)
     model: str = ""
     latency_ms: int = 0
+    tokens: int = 0
+    steps_exhausted: bool = False
 
 
 class Agent:
     def __init__(self, client: genai.Client, model: str, fallback_model: str | None = None,
-                 thinking_budget: int | None = None, registry: dict[str, ToolFn] | None = None,
-                 temperature: float = 0.3):
+                 thinking_budget: int | None = None, registry: dict[str, ToolFn] | None = None):
         self.client = client
         self.model = model
         self.fallback_model = fallback_model
         self.registry = registry
         self.thinking_budget = thinking_budget
-        self.temperature = temperature
 
-    def config_for(self, model: str) -> types.GenerateContentConfig:
+    def config_for(self, model: str, spec: TurnSpec) -> types.GenerateContentConfig:
         # thinking_budget solo existe en la familia 2.5; los modelos 3.x lo gestionan con thinking_level
         # y algunos rechazan el presupuesto 0. Fuera de 2.5 se deja el valor por defecto del modelo.
         thinking = None
         if self.thinking_budget is not None and model.startswith("gemini-2.5"):
             thinking = types.ThinkingConfig(thinking_budget=self.thinking_budget)
         return types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=TOOLS,
-            temperature=self.temperature,
+            system_instruction=spec.system_prompt,
+            tools=[types.Tool(function_declarations=spec.declarations)],
+            temperature=spec.temperature,
             max_output_tokens=2048,
             thinking_config=thinking,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
 
     async def run(self, history: list[types.Content], user_parts: list[types.Part],
-                  ctx: ToolContext) -> AgentResult:
+                  ctx: ToolContext, spec: TurnSpec) -> AgentResult:
         started = time.monotonic()
         result = AgentResult()
         contents = [*history, types.Content(role="user", parts=user_parts)]
+        finished = False
 
         for _ in range(MAX_STEPS):
-            response, result.model = await self._generate(contents)
+            response, result.model = await self._generate(contents, spec)
+            usage = getattr(response, "usage_metadata", None)
+            result.tokens += int(getattr(usage, "total_token_count", 0) or 0)
             candidate = response.candidates[0] if response.candidates else None
             if candidate is None or candidate.content is None or not candidate.content.parts:
+                finished = True
                 break  # respuesta vacía o bloqueada por seguridad
             contents.append(candidate.content)
 
@@ -73,6 +86,7 @@ class Agent:
             if not calls:
                 result.text = "".join(p.text or "" for p in candidate.content.parts
                                       if p.text and not p.thought).strip()
+                finished = True
                 break
 
             responses: list[types.Part] = []
@@ -91,20 +105,26 @@ class Agent:
                     output = {"transferred": True}
                     terminal = True
                 else:
-                    output = await call_tool(call.name, args, ctx, self.registry)
+                    output = await call_tool(call.name, args, ctx, spec.allowed, self.registry)
                 responses.append(types.Part.from_function_response(name=call.name, response=output))
             contents.append(types.Content(role="user", parts=responses))
             if terminal:
+                finished = True
                 break
 
+        if not finished:  # el modelo encadenó herramientas sin terminar: mejor una persona
+            result.steps_exhausted = True
+            result.handoff_summary = result.handoff_summary or (
+                "El asistente no logró resolver el caso en 5 pasos: " + ", ".join(result.tools_used))
         result.history = contents
         result.latency_ms = int((time.monotonic() - started) * 1000)
         return result
 
-    async def _generate(self, contents: list[types.Content]) -> tuple[types.GenerateContentResponse, str]:
+    async def _generate(self, contents: list[types.Content],
+                        spec: TurnSpec) -> tuple[types.GenerateContentResponse, str]:
         try:
             return await self.client.aio.models.generate_content(
-                model=self.model, contents=contents, config=self.config_for(self.model)), self.model
+                model=self.model, contents=contents, config=self.config_for(self.model, spec)), self.model
         except Exception as primary_error:
             if not self.fallback_model or self.fallback_model == self.model:
                 raise
@@ -113,7 +133,7 @@ class Agent:
             try:
                 return await self.client.aio.models.generate_content(
                     model=self.fallback_model, contents=contents,
-                    config=self.config_for(self.fallback_model)), self.fallback_model
+                    config=self.config_for(self.fallback_model, spec)), self.fallback_model
             except Exception as fallback_error:
                 raise AgentError(f"{self.model}: {describe_error(primary_error)} | "
                                  f"{self.fallback_model}: {describe_error(fallback_error)}") from fallback_error

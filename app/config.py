@@ -17,6 +17,8 @@ def _env(name: str, default: str | None = None, required: bool = False) -> str:
 # https://ai.google.dev/gemini-api/docs/deprecations y cámbialos con GEMINI_MODEL / GEMINI_FALLBACK_MODEL.
 DEFAULT_MODEL = "gemini-3.5-flash"
 DEFAULT_FALLBACK_MODEL = "gemini-flash-latest"  # alias de Google: siempre el Flash más reciente
+DEFAULT_LITE_MODEL = "gemini-flash-lite-latest"  # clasificador de áreas: barato y rápido
+ROLES = ("all", "webhook", "worker", "sender", "console")
 
 
 @dataclass(frozen=True)
@@ -33,22 +35,27 @@ class Settings:
     gemini_model: str = DEFAULT_MODEL
     gemini_fallback_model: str = DEFAULT_FALLBACK_MODEL
     thinking_budget: int | None = None  # solo modelos 2.5: 0 = sin "thinking"; None = valor por defecto
+    classifier_model: str = DEFAULT_LITE_MODEL  # vacío = clasificador por palabras clave
 
     # Estado y colas
     redis_url: str = "redis://localhost:6379/0"
+    database_url: str = "sqlite+aiosqlite:///./whatsappia.db"  # producción: postgresql+asyncpg://...
     queue_mode: str = "local"  # "local" (asyncio) | "pubsub"
     pubsub_topic: str = ""  # projects/<id>/topics/<topic>
     pubsub_push_token: str = ""  # secreto compartido en la URL de push
 
     # Comportamiento
-    debounce_seconds: float = 2.0
+    debounce_seconds: float = 4.0
     session_ttl_seconds: int = 7 * 24 * 3600
     max_history_contents: int = 30
     max_media_bytes: int = 10 * 1024 * 1024
 
     # Operación
     handoff_webhook_url: str = ""  # tu inbox humano (Chatwoot, Zendesk, n8n...)
-    admin_token: str = ""
+    secret_key: str = "cambia-esto"  # firma las sesiones del panel
+    owner_email: str = ""  # crea el primer owner si no hay usuarios
+    owner_password: str = ""
+    role: str = "all"  # all | webhook | worker | sender | console (ver README)
     pseudonym_pepper: str = "cambia-esto"
 
     @classmethod
@@ -64,14 +71,19 @@ class Settings:
             gemini_model=_env("GEMINI_MODEL", DEFAULT_MODEL),
             gemini_fallback_model=_env("GEMINI_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
             thinking_budget=None if tb == "" else int(tb),
+            classifier_model=_env("CLASSIFIER_MODEL", DEFAULT_LITE_MODEL),
             redis_url=_env("REDIS_URL", "redis://localhost:6379/0"),
+            database_url=_env("DATABASE_URL", "sqlite+aiosqlite:///./whatsappia.db"),
             queue_mode=_env("QUEUE_MODE", "local"),
             pubsub_topic=_env("PUBSUB_TOPIC"),
             pubsub_push_token=_env("PUBSUB_PUSH_TOKEN"),
-            debounce_seconds=float(_env("DEBOUNCE_SECONDS", "2.0")),
+            debounce_seconds=float(_env("DEBOUNCE_SECONDS", "4.0")),
             session_ttl_seconds=int(_env("SESSION_TTL_SECONDS", str(7 * 24 * 3600))),
             max_history_contents=int(_env("MAX_HISTORY_CONTENTS", "30")),
             handoff_webhook_url=_env("HANDOFF_WEBHOOK_URL"),
-            admin_token=_env("ADMIN_TOKEN"),
+            secret_key=_env("SECRET_KEY", required=True),
+            owner_email=_env("OWNER_EMAIL"),
+            owner_password=_env("OWNER_PASSWORD"),
+            role=_env("ROLE", "all"),
             pseudonym_pepper=_env("PSEUDONYM_PEPPER", required=True),
         )

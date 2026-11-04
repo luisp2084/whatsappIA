@@ -1,24 +1,35 @@
-"""App FastAPI: webhook de WhatsApp, endpoint de la cola, API y panel web de administración."""
+"""App FastAPI: webhook de WhatsApp, endpoint de la cola, outbox, API y panel web.
+
+La misma imagen sirve para todos los servicios; ROLE elige qué monta cada uno:
+- all: todo en un proceso (desarrollo, demo o un solo servicio de Cloud Run).
+- webhook: GET/POST /webhook (público). Valida la firma y publica en la cola.
+- worker: POST /tasks/pubsub (privado). Orquestador y herramientas.
+- sender: bucle del outbox que reintenta los envíos pendientes.
+- console: panel /admin y API /api (detrás de IAP).
+"""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import json
 import logging
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import auth
 from .admin import build_router
-
 from .config import Settings
+from .db import Database
 from .parsing import IncomingMessage, parse_webhook
 from .queue import LocalQueue, PubSubQueue, Queue
+from .repo import Repo
 from .security import pseudonymize, verify_signature
 from .worker import Worker
 
@@ -28,107 +39,152 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("app")
 
 
-def _default_components(settings: Settings) -> dict[str, Any]:
-    from google import genai
-    from redis.asyncio import Redis
+def _default_components(settings: Settings, needed: set[str]) -> dict[str, Any]:
+    """Construye solo lo que no llegó en `overrides` (los tests inyectan dobles)."""
+    out: dict[str, Any] = {}
+    client = None
+    if needed & {"agent", "classifier", "isp", "suggester"}:
+        from google import genai
 
-    from .agent import Agent
-    from .session import SessionStore
-    from .whatsapp import WhatsAppClient
-    from .worker import WebhookHandoff
+        client = genai.Client(api_key=settings.gemini_api_key or None)
+    if "store" in needed:
+        from redis.asyncio import Redis
 
-    return {
-        "store": SessionStore(Redis.from_url(settings.redis_url, decode_responses=True),
-                              settings.session_ttl_seconds),
-        "wa": WhatsAppClient(settings.wa_token, settings.wa_phone_number_id, settings.graph_version),
-        "agent": Agent(genai.Client(api_key=settings.gemini_api_key or None), settings.gemini_model,
-                       settings.gemini_fallback_model, settings.thinking_budget),
-        "handoff": WebhookHandoff(settings.handoff_webhook_url),
-    }
+        from .session import SessionStore
+
+        out["store"] = SessionStore(Redis.from_url(settings.redis_url, decode_responses=True),
+                                    settings.session_ttl_seconds)
+    if "db" in needed:
+        out["db"] = Database(settings.database_url)
+    if "channel" in needed:
+        from .whatsapp import WhatsAppClient
+
+        out["channel"] = WhatsAppClient(settings.wa_token, settings.wa_phone_number_id, settings.graph_version)
+    if "agent" in needed:
+        from .agent import Agent
+
+        out["agent"] = Agent(client, settings.gemini_model, settings.gemini_fallback_model, settings.thinking_budget)
+    if "classifier" in needed:
+        from .areas import KeywordClassifier, LLMClassifier
+
+        out["classifier"] = (LLMClassifier(client, settings.classifier_model) if settings.classifier_model
+                             else KeywordClassifier())
+    if "isp" in needed:
+        from .isp import build_isp
+
+        out["isp"] = build_isp(client, settings.gemini_model)
+    if "handoff" in needed:
+        from .worker import WebhookHandoff
+
+        out["handoff"] = WebhookHandoff(settings.handoff_webhook_url)
+    if "suggester" in needed:
+        from .revision import RuleSuggester
+
+        out["suggester"] = RuleSuggester(client, settings.gemini_model)
+    return out
+
+
+async def bootstrap_owner(repo: Repo, settings: Settings) -> None:
+    """Crea el primer owner desde OWNER_EMAIL / OWNER_PASSWORD si aún no hay usuarios."""
+    if await repo.count_users() > 0 or not (settings.owner_email and settings.owner_password):
+        return
+    if problem := auth.validate_password(settings.owner_password):
+        raise RuntimeError(f"OWNER_PASSWORD no es válida: {problem}")
+    await repo.create_user(settings.owner_email, "Owner", "owner", auth.hash_password(settings.owner_password))
+    await repo.audit("sistema", "user.bootstrap", settings.owner_email)
+    log.info("Usuario owner inicial creado: %s", settings.owner_email)
 
 
 def create_app(settings: Settings, **overrides: Any) -> FastAPI:
-    """`overrides` permite inyectar store/wa/agent/handoff/queue (tests)."""
+    """`overrides` acepta store, db, channel, agent, classifier, isp, handoff, suggester y queue."""
+    role = settings.role
+    serves = (lambda *r: role == "all" or role in r)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        parts = {**(_default_components(settings) if not {"store", "wa", "agent", "handoff"} <= overrides.keys()
-                    else {}), **overrides}
-        worker = Worker(parts["store"], parts["wa"], parts["agent"], parts["handoff"],
-                        debounce_seconds=settings.debounce_seconds,
-                        max_history=settings.max_history_contents,
-                        max_media_bytes=settings.max_media_bytes,
+        names = {"store", "db", "channel", "agent", "classifier", "isp", "handoff", "suggester"}
+        parts = {**_default_components(settings, names - overrides.keys()), **overrides}
+        db: Database = parts["db"]
+        await db.create_all()
+        repo = Repo(db)
+        await bootstrap_owner(repo, settings)
+        worker = Worker(parts["store"], repo, parts["channel"], parts["agent"], parts["isp"], parts["handoff"],
+                        classifier=parts["classifier"], debounce_seconds=settings.debounce_seconds,
+                        max_history=settings.max_history_contents, max_media_bytes=settings.max_media_bytes,
                         pepper=settings.pseudonym_pepper)
         queue: Queue = parts.get("queue") or (
-            PubSubQueue(settings.pubsub_topic) if settings.queue_mode == "pubsub"
-            else LocalQueue(worker.handle_incoming)
-        )
-        app.state.worker, app.state.queue, app.state.store = worker, queue, parts["store"]
+            PubSubQueue(settings.pubsub_topic) if settings.queue_mode == "pubsub" else LocalQueue(worker.handle_incoming))
+        app.state.worker, app.state.queue, app.state.store, app.state.repo = worker, queue, parts["store"], repo
+        app.state.suggester = parts["suggester"]
+        tasks: list[asyncio.Task] = []
+        if serves("sender") and overrides.get("run_background", True):
+            tasks.append(asyncio.create_task(worker.outbox.run_forever()))
+        if serves("worker") and overrides.get("run_background", True):
+            tasks.append(asyncio.create_task(worker.recover()))
         yield
+        for t in tasks:
+            t.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await t
         if isinstance(queue, LocalQueue):
             await queue.drain()
+        if "db" not in overrides:
+            await db.dispose()
 
     app = FastAPI(title="Agente WhatsApp", lifespan=lifespan)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "role": role}
 
-    # --- Webhook de Meta ---------------------------------------------------------
-
-    @app.get("/webhook")
-    async def verify(request: Request) -> Response:
-        q = request.query_params
-        if q.get("hub.mode") == "subscribe" and hmac.compare_digest(
-                q.get("hub.verify_token", ""), settings.wa_verify_token):
-            return PlainTextResponse(q.get("hub.challenge", ""))
-        raise HTTPException(status_code=403)
-
-    @app.post("/webhook")
-    async def receive(request: Request,
-                      x_hub_signature_256: str | None = Header(default=None)) -> Response:
-        raw = await request.body()
-        if not verify_signature(raw, x_hub_signature_256, settings.wa_app_secret):
-            raise HTTPException(status_code=401)
-        messages, statuses = parse_webhook(json.loads(raw))
-        for msg in messages:
-            await request.app.state.queue.publish(msg)  # nada de LLM aquí: responder en < 1 s
-        for st in statuses:
-            if st.status == "failed":
-                log.warning(json.dumps({"event": "wa_status_failed",
-                                        "user": pseudonymize(st.wa_id, settings.pseudonym_pepper),
-                                        "errors": st.errors}))
-        return Response(status_code=200)
-
-    # --- Suscripción push de Pub/Sub ------------------------------------------
-
-    @app.post("/tasks/pubsub")
-    async def pubsub_push(request: Request, token: str = "") -> Response:
-        if settings.pubsub_push_token and not hmac.compare_digest(token, settings.pubsub_push_token):
+    if serves("webhook"):
+        @app.get("/webhook")
+        async def verify(request: Request) -> Response:
+            q = request.query_params
+            if q.get("hub.mode") == "subscribe" and hmac.compare_digest(
+                    q.get("hub.verify_token", ""), settings.wa_verify_token):
+                return PlainTextResponse(q.get("hub.challenge", ""))
             raise HTTPException(status_code=403)
-        envelope = await request.json()
-        data = json.loads(base64.b64decode(envelope["message"]["data"]))
-        await request.app.state.worker.handle_incoming(IncomingMessage.from_dict(data))
-        return Response(status_code=204)  # 2xx = ack; un error hace que Pub/Sub reintente
 
-    # --- Administración: devolver la conversación al bot ------------------------
+        @app.post("/webhook")
+        async def receive(request: Request, x_hub_signature_256: str | None = Header(default=None)) -> Response:
+            raw = await request.body()
+            if not verify_signature(raw, x_hub_signature_256, settings.wa_app_secret):
+                raise HTTPException(status_code=401)
+            messages, statuses = parse_webhook(json.loads(raw))
+            for msg in messages:
+                await request.app.state.queue.publish(msg)  # nada de LLM aquí: responder en < 1 s
+            metrics: dict[str, int] = {}
+            for st in statuses:
+                if st.status == "failed":
+                    metrics["wa_status_failed"] = metrics.get("wa_status_failed", 0) + 1
+                    log.warning(json.dumps({"event": "wa_status_failed", "errors": st.errors,
+                                            "user": pseudonymize(st.wa_id, settings.pseudonym_pepper)}))
+                if st.pricing.get("billable"):  # costo real de Meta por categoría
+                    k = f"wa_billable:{st.pricing.get('category', 'otro')}"
+                    metrics[k] = metrics.get(k, 0) + 1
+            if metrics:
+                await request.app.state.store.incr_metrics(metrics)
+            return Response(status_code=200)
 
-    @app.post("/handoff/release")
-    async def release(payload: dict[str, str], authorization: str = Header(default="")) -> dict[str, str]:
-        if not settings.admin_token or not hmac.compare_digest(authorization, f"Bearer {settings.admin_token}"):
-            raise HTTPException(status_code=401)
-        await app.state.worker.set_mode(payload["wa_id"], "bot")
-        return {"status": "bot"}
+    if serves("worker"):
+        @app.post("/tasks/pubsub")
+        async def pubsub_push(request: Request, token: str = "") -> Response:
+            if settings.pubsub_push_token and not hmac.compare_digest(token, settings.pubsub_push_token):
+                raise HTTPException(status_code=403)
+            envelope = await request.json()
+            data = json.loads(base64.b64decode(envelope["message"]["data"]))
+            await request.app.state.worker.handle_incoming(IncomingMessage.from_dict(data))
+            return Response(status_code=204)  # 2xx = ack; un error hace que Pub/Sub reintente
 
-    # --- Panel web ---------------------------------------------------------------
+    if serves("console"):
+        app.include_router(build_router(settings.secret_key))
 
-    app.include_router(build_router(settings.admin_token))
+        @app.get("/", include_in_schema=False)
+        async def root() -> Response:
+            return RedirectResponse("/admin/")
 
-    @app.get("/", include_in_schema=False)
-    async def root() -> Response:
-        return RedirectResponse("/admin/")
-
-    app.mount("/admin", StaticFiles(directory=WEB_DIR, html=True), name="admin")
+        app.mount("/admin", StaticFiles(directory=WEB_DIR, html=True), name="admin")
 
     return app
 

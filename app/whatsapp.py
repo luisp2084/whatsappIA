@@ -55,6 +55,14 @@ class WhatsAppClient:
             },
         })
 
+    async def send_template(self, to: str, name: str, language: str, params: list[str]) -> None:
+        """Plantilla aprobada en Meta: la única forma de escribir fuera de la ventana de 24 h."""
+        template: dict[str, Any] = {"name": name, "language": {"code": language}}
+        if params:
+            template["components"] = [{"type": "body", "parameters": [
+                {"type": "text", "text": str(p)[:1024]} for p in params]}]
+        await self._post_message({"to": to, "type": "template", "template": template})
+
     async def mark_read(self, message_id: str, typing: bool = True) -> None:
         """Marca como leído y muestra 'escribiendo…' (dura hasta la respuesta o ~25 s)."""
         payload: dict[str, Any] = {"messaging_product": "whatsapp", "status": "read",

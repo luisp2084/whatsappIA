@@ -61,3 +61,16 @@ async def test_download_media_two_steps():
 
     data, mime = await client_for(handler).download_media("MID", 1000)
     assert data == b"ogg" and mime == "audio/ogg"
+
+
+async def test_send_template_payload():
+    calls = []
+
+    def handler(req: httpx.Request):
+        calls.append(json.loads(req.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.2"}]})
+
+    await client_for(handler).send_template("346", "recordatorio_pago", "es", ["Ana", "noviembre"])
+    tpl = calls[0]["template"]
+    assert tpl["name"] == "recordatorio_pago" and tpl["language"] == {"code": "es"}
+    assert [p["text"] for p in tpl["components"][0]["parameters"]] == ["Ana", "noviembre"]

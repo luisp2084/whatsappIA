@@ -1,33 +1,31 @@
-"""Estado en Redis: sesiones con TTL, deduplicación, buffer de ráfagas y locks por usuario."""
+"""Estado efímero en Redis: historial del LLM, deduplicación, buffer de ráfagas, locks,
+límites de frecuencia, datos temporales y contadores de métricas.
+
+Lo que no puede caducar (conversaciones, mensajes, pagos, auditoría) vive en la base de datos
+(`app/repo.py`).
+"""
 
 from __future__ import annotations
 
 import json
-import time
 import uuid
-from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from redis.asyncio import Redis
 
 DEDUPE_TTL = 24 * 3600
-TRANSCRIPT_MAX = 300
 METRICS_TTL = 90 * 24 * 3600
-WINDOW_SECONDS = 24 * 3600  # ventana de servicio de WhatsApp
 
 
 @dataclass
 class Session:
+    """Memoria de corto plazo de la IA para un número."""
+
     wa_id: str
     history: list[dict[str, Any]] = field(default_factory=list)  # types.Content serializados
-    mode: str = "bot"  # "bot" | "human"
-    disclosed: bool = False  # ya se informó de que es una IA
-    profile_name: str = ""
-
-    @property
-    def is_new(self) -> bool:
-        return not self.history and not self.disclosed
+    summary: str = ""  # resumen de lo recortado del historial
 
 
 class SessionStore:
@@ -35,14 +33,14 @@ class SessionStore:
         self.r = redis
         self.ttl = ttl_seconds
 
-    # --- idempotencia --------------------------------------------------------
+    # --- idempotencia ---------------------------------------------------------------
 
     async def seen(self, message_id: str) -> bool:
-        """True si el mensaje ya se procesó (Meta puede reenviar el mismo evento)."""
+        """True si el mensaje ya llegó (Meta y Pub/Sub pueden reentregar el mismo evento)."""
         created = await self.r.set(f"dedupe:{message_id}", 1, nx=True, ex=DEDUPE_TTL)
         return not created
 
-    # --- buffer de ráfagas ---------------------------------------------------
+    # --- buffer de ráfagas ----------------------------------------------------------
 
     async def push(self, wa_id: str, item: dict[str, Any]) -> None:
         key = f"buf:{wa_id}"
@@ -60,7 +58,11 @@ class SessionStore:
     async def has_pending(self, wa_id: str) -> bool:
         return bool(await self.r.llen(f"buf:{wa_id}"))
 
-    # --- lock por usuario (un solo worker por conversación) -------------------
+    async def users_with_pending(self) -> list[str]:
+        """Buffers que quedaron sin procesar (p. ej. el proceso se reinició a mitad de un turno)."""
+        return [k.split(":", 1)[1] async for k in self.r.scan_iter(match="buf:*", count=200)]
+
+    # --- lock por conversación ------------------------------------------------------
 
     async def try_lock(self, wa_id: str, ttl: int = 120) -> str | None:
         token = uuid.uuid4().hex
@@ -68,86 +70,50 @@ class SessionStore:
         return token if ok else None
 
     async def release_lock(self, wa_id: str, token: str) -> None:
-        # Borra solo si el lock sigue siendo nuestro.
         script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
         await self.r.eval(script, 1, f"lock:{wa_id}", token)
 
-    # --- sesión --------------------------------------------------------------
+    async def is_locked(self, wa_id: str) -> bool:
+        return bool(await self.r.exists(f"lock:{wa_id}"))
+
+    # --- límites de frecuencia y datos temporales ------------------------------------
+
+    async def allow(self, key: str, every_seconds: int) -> bool:
+        """True como mucho una vez cada `every_seconds` para esa clave (p. ej. reiniciar una ONT)."""
+        return bool(await self.r.set(f"rate:{key}", 1, nx=True, ex=every_seconds))
+
+    async def retry_in(self, key: str) -> int:
+        return max(0, int(await self.r.ttl(f"rate:{key}")))
+
+    async def put_json(self, key: str, value: Any, ttl: int) -> None:
+        await self.r.set(f"tmp:{key}", json.dumps(value, ensure_ascii=False), ex=ttl)
+
+    async def get_json(self, key: str) -> Any:
+        raw = await self.r.get(f"tmp:{key}")
+        return json.loads(raw) if raw else None
+
+    async def pop_json(self, key: str) -> Any:
+        raw = await self.r.getdel(f"tmp:{key}")
+        return json.loads(raw) if raw else None
+
+    # --- sesión del LLM ----------------------------------------------------------------
 
     async def load(self, wa_id: str) -> Session:
         raw = await self.r.get(f"session:{wa_id}")
         if not raw:
             return Session(wa_id=wa_id)
-        return Session(**json.loads(raw))
+        data = json.loads(raw)
+        return Session(wa_id=wa_id, history=data.get("history", []), summary=data.get("summary", ""))
 
     async def save(self, session: Session) -> None:
         await self.r.set(f"session:{session.wa_id}", json.dumps(asdict(session)), ex=self.ttl)
 
-    # --- opt-out (sin TTL: debe persistir aunque caduque la sesión) ----------
-
-    async def set_opt_out(self, wa_id: str, value: bool) -> None:
-        if value:
-            await self.r.set(f"optout:{wa_id}", 1)
-        else:
-            await self.r.delete(f"optout:{wa_id}")
-
-    async def is_opted_out(self, wa_id: str) -> bool:
-        return bool(await self.r.exists(f"optout:{wa_id}"))
-
     async def delete_user(self, wa_id: str) -> None:
-        """Derecho de supresión: elimina todo lo que guardamos de este usuario."""
-        await self.r.delete(f"session:{wa_id}", f"buf:{wa_id}", f"transcript:{wa_id}", f"meta:{wa_id}")
-        await self.r.zrem("convs", wa_id)
+        await self.r.delete(f"session:{wa_id}", f"buf:{wa_id}")
+        async for key in self.r.scan_iter(match=f"tmp:*{wa_id}*", count=200):
+            await self.r.delete(key)
 
-    # --- transcripción e índice para el panel web ------------------------------
-
-    async def record(self, wa_id: str, role: str, text: str, name: str = "") -> None:
-        """role: user | bot | agent | system. Alimenta el panel; el LLM usa `history`."""
-        now = time.time()
-        item = json.dumps({"ts": now, "role": role, "text": text}, ensure_ascii=False)
-        meta = {"last_ts": now, "last_role": role, "last_text": text[:200]}
-        if role == "user":
-            meta["last_user_ts"] = now
-        if name:
-            meta["name"] = name
-        async with self.r.pipeline(transaction=False) as pipe:
-            pipe.rpush(f"transcript:{wa_id}", item)
-            pipe.ltrim(f"transcript:{wa_id}", -TRANSCRIPT_MAX, -1)
-            pipe.expire(f"transcript:{wa_id}", self.ttl)
-            pipe.hset(f"meta:{wa_id}", mapping=meta)
-            pipe.expire(f"meta:{wa_id}", self.ttl)
-            pipe.zadd("convs", {wa_id: now})
-            await pipe.execute()
-
-    async def transcript(self, wa_id: str) -> list[dict[str, Any]]:
-        return [json.loads(i) for i in await self.r.lrange(f"transcript:{wa_id}", 0, -1)]
-
-    async def meta(self, wa_id: str) -> dict[str, Any]:
-        raw = await self.r.hgetall(f"meta:{wa_id}")
-        last_user = float(raw.get("last_user_ts", 0) or 0)
-        session = await self.load(wa_id)
-        return {
-            "wa_id": wa_id,
-            "name": raw.get("name", "") or session.profile_name,
-            "mode": session.mode,
-            "last_ts": float(raw.get("last_ts", 0) or 0),
-            "last_role": raw.get("last_role", ""),
-            "last_text": raw.get("last_text", ""),
-            "window_open": time.time() - last_user < WINDOW_SECONDS,
-            "window_closes_at": last_user + WINDOW_SECONDS if last_user else None,
-            "opted_out": await self.is_opted_out(wa_id),
-        }
-
-    async def list_conversations(self, limit: int = 100) -> list[dict[str, Any]]:
-        out = []
-        for wa_id in await self.r.zrevrange("convs", 0, limit - 1):
-            if not await self.r.exists(f"meta:{wa_id}"):
-                await self.r.zrem("convs", wa_id)  # caducó por TTL
-                continue
-            out.append(await self.meta(wa_id))
-        return out
-
-    # --- métricas diarias (agregadas, sin PII) -----------------------------------
+    # --- métricas diarias (agregadas, sin PII) -------------------------------------------
 
     async def incr_metrics(self, values: dict[str, int]) -> None:
         key = f"metrics:{datetime.now(timezone.utc):%Y-%m-%d}"

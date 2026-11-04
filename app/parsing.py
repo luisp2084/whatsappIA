@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -32,6 +32,7 @@ class StatusEvent:
     message_id: str
     status: str  # sent | delivered | read | failed
     errors: list[dict[str, Any]]
+    pricing: dict[str, Any] = field(default_factory=dict)  # {"billable", "category", "pricing_model"}
 
 
 def parse_webhook(body: dict[str, Any]) -> tuple[list[IncomingMessage], list[StatusEvent]]:
@@ -52,6 +53,7 @@ def parse_webhook(body: dict[str, Any]) -> tuple[list[IncomingMessage], list[Sta
                         message_id=s.get("id", ""),
                         status=s.get("status", ""),
                         errors=s.get("errors", []),
+                        pricing=s.get("pricing", {}) or {},
                     )
                 )
     return messages, statuses
