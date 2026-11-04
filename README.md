@@ -63,7 +63,12 @@ motivo aparece en la conversación como aviso gris *"La IA no pudo responder: �
 | `429 RESOURCE_EXHAUSTED` | Límite del plan gratuito alcanzado | Espera unos minutos o activa la facturación |
 | `403 PERMISSION_DENIED` | La API no está habilitada para el proyecto de la clave | Crea la clave desde AI Studio |
 
-Para volver a arrancar la demo desde la terminal:
+Para volver a arrancar la demo desde la terminal, instala primero las dependencias (tras un `git pull` puede
+haber librerías nuevas; si no, verás `ModuleNotFoundError`):
+
+```bash
+pip install -r requirements-dev.txt
+```
 
 ```bash
 python -m app.demo

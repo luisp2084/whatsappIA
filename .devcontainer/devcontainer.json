@@ -2,7 +2,7 @@
   "name": "Agente WhatsApp (demo)",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
   "postCreateCommand": "pip install --user -r requirements-dev.txt",
-  "postAttachCommand": "python -m app.demo",
+  "postAttachCommand": "pip install --user -q -r requirements-dev.txt && python -m app.demo",
   "forwardPorts": [8080],
   "portsAttributes": {
     "8080": { "label": "Panel del agente", "onAutoForward": "openBrowser" }
